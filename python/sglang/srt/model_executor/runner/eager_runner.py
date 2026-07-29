@@ -234,7 +234,9 @@ class EagerRunner(BaseRunner):
                 # Prepare model-specific attention metadata before planning,
                 # e.g. Moss-VL's prefill cross-attention custom mask.
                 model_runner.model.prepare_forward_batch(forward_batch)
-            attn_backend.init_forward_metadata(forward_batch)
+            # SSM models (Mamba, Mamba2) don't use attention backends
+            if attn_backend is not None:
+                attn_backend.init_forward_metadata(forward_batch)
         # FIXME: add pp_proxy_tensors arg to all models
         kwargs = model_runner._pp_kwargs(pp_proxy_tensors)
 
@@ -283,7 +285,9 @@ class EagerRunner(BaseRunner):
                 # Prepare model-specific attention metadata before planning,
                 # e.g. Moss-VL's prefill cross-attention custom mask.
                 model_runner.model.prepare_forward_batch(forward_batch)
-            model_runner.attn_backend.init_forward_metadata(forward_batch)
+            # SSM models (Mamba, Mamba2) don't use attention backends
+            if model_runner.attn_backend is not None:
+                model_runner.attn_backend.init_forward_metadata(forward_batch)
 
         cp_v2_active = is_cp_v2_active(forward_batch)
         if not cp_v2_active:
@@ -388,7 +392,9 @@ class EagerRunner(BaseRunner):
         if forward_batch.batch_size > 0:
             if not self.enable_pdmux:
                 forward_batch = self.load_batch(forward_batch, pp_proxy_tensors)
-            model_runner.attn_backend.init_forward_metadata(forward_batch)
+            # SSM models (Mamba, Mamba2) don't use attention backends
+            if model_runner.attn_backend is not None:
+                model_runner.attn_backend.init_forward_metadata(forward_batch)
         else:
             model_runner.attn_backend.forward_metadata = None
 

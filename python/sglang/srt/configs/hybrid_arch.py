@@ -95,6 +95,41 @@ def mamba2_config(model_config: ModelConfig):
         else:
             return config
 
+    # Pure Mamba2 models (e.g., Mamba2ForCausalLM). The `_is_pure_mamba2` flag is
+    # set in ModelConfig only for the Mamba2ForCausalLM architecture, so this
+    # branch never triggers for other models.
+    if getattr(config, "_is_pure_mamba2", False):
+        # Add mamba_chunk_size alias for compatibility with Mamba2AttnBackend
+        if not hasattr(config, "mamba_chunk_size"):
+            config.mamba_chunk_size = config.chunk_size
+
+        # Create mamba2_cache_params if not already present
+        # This happens here where we have access to the actual tp_size through model_config
+        if not hasattr(config, "mamba2_cache_params"):
+            from sglang.srt.configs.mamba_utils import (
+                Mamba2CacheParams,
+                Mamba2StateShape,
+            )
+            from sglang.srt.runtime_context import get_parallel
+
+            # Get actual tp_size from parallel context
+            tp_size = get_parallel().tp_size if get_parallel() else 1
+
+            state_shape = Mamba2StateShape.create(
+                tp_world_size=tp_size,
+                intermediate_size=config.intermediate_size,
+                n_groups=config.n_groups,
+                num_heads=config.num_heads,
+                head_dim=config.head_dim,
+                state_size=config.state_size,
+                conv_kernel=config.conv_kernel,
+            )
+            config.mamba2_cache_params = Mamba2CacheParams(
+                shape=state_shape,
+                layers=list(range(config.num_hidden_layers)),
+            )
+        return config
+
     return None
 
 
