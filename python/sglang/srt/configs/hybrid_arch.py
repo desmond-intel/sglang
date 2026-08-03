@@ -130,6 +130,39 @@ def mamba2_config(model_config: ModelConfig):
             )
         return config
 
+    # Pure Mamba-1 models (e.g. Falcon-Mamba). The `_is_pure_falcon_mamba` flag
+    # is set in ModelConfig only for FalconMambaForCausalLM, so this branch never
+    # triggers for other models. Mamba-1 rides the shared Mamba2 attention
+    # backend via a full-rank (head_dim==1) state layout, see
+    # Mamba2StateShape.create_mamba1.
+    if getattr(config, "_is_pure_falcon_mamba", False):
+        # The Mamba-1 selective scan runs per-token (no chunked SSD kernel), but
+        # Mamba2AttnBackend.__init__ still reads mamba_chunk_size for its mixed
+        # metadata; the conv window must stay smaller than it.
+        if not hasattr(config, "mamba_chunk_size"):
+            config.mamba_chunk_size = 256
+
+        if not hasattr(config, "mamba2_cache_params"):
+            from sglang.srt.configs.mamba_utils import (
+                Mamba2CacheParams,
+                Mamba2StateShape,
+            )
+            from sglang.srt.runtime_context import get_parallel
+
+            tp_size = get_parallel().tp_size if get_parallel() else 1
+
+            state_shape = Mamba2StateShape.create_mamba1(
+                tp_world_size=tp_size,
+                intermediate_size=config.intermediate_size,
+                state_size=config.state_size,
+                conv_kernel=config.conv_kernel,
+            )
+            config.mamba2_cache_params = Mamba2CacheParams(
+                shape=state_shape,
+                layers=list(range(config.num_hidden_layers)),
+            )
+        return config
+
     return None
 
 
