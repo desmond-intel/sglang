@@ -80,17 +80,25 @@ class AttentionArch(IntEnum):
     SSM = auto()  # State Space Models (Mamba, Mamba2)
 
 
+# Pure Mamba-1 (selective-scan) architectures. These share one mixer/state
+# layout (full-rank A, low-rank dt); they differ only in cosmetic details
+# handled in their model files (e.g. Falcon-Mamba's extra B/C/dt RMSNorm, tied
+# embeddings). Listed together so the SSM cache wiring treats them uniformly.
+#   - FalconMambaForCausalLM : e.g. tiiuae/falcon-mamba-7b(-instruct)
+#   - MambaForCausalLM       : e.g. state-spaces/mamba-*-hf
+PURE_MAMBA1_ARCHITECTURES = (
+    "FalconMambaForCausalLM",
+    "MambaForCausalLM",
+)
+
 # Pure state-space (SSM) causal-LM architectures: no attention, hence no
 # `num_attention_heads` / `head_dim` in their HF config. Listing them here keeps
 # the SSM special-casing in `_derive_model_shapes` (head-dim derivation) and in
 # the attention-arch detection below in sync from a single source of truth, so
 # adding a new pure-SSM model is one edit and never regresses attention models.
 #   - Mamba2ForCausalLM : Mamba-2 SSD (e.g. Mamba-Codestral-7B)
-#   - FalconMambaForCausalLM : Mamba-1 selective scan (e.g. tiiuae/falcon-mamba-7b)
-PURE_SSM_ARCHITECTURES = (
-    "Mamba2ForCausalLM",
-    "FalconMambaForCausalLM",
-)
+#   - Mamba-1 archs (PURE_MAMBA1_ARCHITECTURES): selective scan
+PURE_SSM_ARCHITECTURES = ("Mamba2ForCausalLM",) + PURE_MAMBA1_ARCHITECTURES
 
 
 class ModelImpl(str, Enum):
@@ -1001,12 +1009,17 @@ class ModelConfig:
                 self.hf_text_config.full_attention_layer_ids = []
                 # Set a flag so hybrid_arch.py recognizes this as Mamba2
                 self.hf_text_config._is_pure_mamba2 = True
-            elif "FalconMambaForCausalLM" in self.hf_config.architectures:
-                # Falcon-Mamba is a pure Mamba-1 (selective-scan) SSM.
+            elif any(
+                arch in self.hf_config.architectures
+                for arch in PURE_MAMBA1_ARCHITECTURES
+            ):
+                # Pure Mamba-1 (selective-scan) SSMs: Falcon-Mamba, state-spaces
+                # Mamba. Same mixer/state layout; the model file handles cosmetic
+                # differences (e.g. Falcon's B/C/dt RMSNorm).
                 self.attention_arch = AttentionArch.SSM
                 self.hf_text_config.full_attention_layer_ids = []
                 # Set a flag so hybrid_arch.py builds Mamba-1 cache params.
-                self.hf_text_config._is_pure_falcon_mamba = True
+                self.hf_text_config._is_pure_mamba1 = True
             else:
                 self.attention_arch = AttentionArch.MHA
 

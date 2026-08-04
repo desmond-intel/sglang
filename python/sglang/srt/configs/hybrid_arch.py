@@ -130,12 +130,12 @@ def mamba2_config(model_config: ModelConfig):
             )
         return config
 
-    # Pure Mamba-1 models (e.g. Falcon-Mamba). The `_is_pure_falcon_mamba` flag
-    # is set in ModelConfig only for FalconMambaForCausalLM, so this branch never
-    # triggers for other models. Mamba-1 rides the shared Mamba2 attention
-    # backend via a full-rank (head_dim==1) state layout, see
+    # Pure Mamba-1 models (Falcon-Mamba, state-spaces Mamba). The
+    # `_is_pure_mamba1` flag is set in ModelConfig only for those architectures,
+    # so this branch never triggers for other models. Mamba-1 rides the shared
+    # Mamba2 attention backend via a full-rank (head_dim==1) state layout, see
     # Mamba2StateShape.create_mamba1.
-    if getattr(config, "_is_pure_falcon_mamba", False):
+    if getattr(config, "_is_pure_mamba1", False):
         # The Mamba-1 selective scan runs per-token (no chunked SSD kernel), but
         # Mamba2AttnBackend.__init__ still reads mamba_chunk_size for its mixed
         # metadata; the conv window must stay smaller than it.
