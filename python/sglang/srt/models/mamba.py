@@ -204,14 +204,17 @@ class MambaForCausalLM(nn.Module):
         loaded_params: Set[str] = set()
 
         for name, loaded_weight in weights:
-            # Map HuggingFace Mamba checkpoint names to SGLang modules:
-            #   backbone.            -> model.
-            #   backbone.embeddings  -> model.embed_tokens
-            #   backbone.norm_f      -> model.norm
+            # Map HuggingFace / state-spaces Mamba checkpoint names to SGLang
+            # modules:
+            #   backbone.               -> model.
+            #   backbone.embeddings.    -> model.embed_tokens.   (-hf conversions)
+            #   backbone.embedding.     -> model.embed_tokens.   (raw state-spaces)
+            #   backbone.norm_f.        -> model.norm.
             # `A_log` is kept as-is (the mixer computes A = -exp(A_log)).
             if name.startswith("backbone."):
                 name = "model." + name[len("backbone.") :]
             name = name.replace("embeddings.", "embed_tokens.")
+            name = name.replace("embedding.", "embed_tokens.")
             name = name.replace("norm_f.", "norm.")
 
             if name not in params_dict:
