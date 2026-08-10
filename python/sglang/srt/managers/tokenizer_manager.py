@@ -1168,6 +1168,15 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
                     "Truncating the input."
                 )
                 del input_ids[_max_req_len:]
+                # Encoder embedding models (e.g. BERT/bge) end each input with a
+                # separator token that the pooled (CLS/mean) embedding depends
+                # on. A plain head-truncation drops it and shifts the embedding;
+                # re-append it as the final token. Generation models don't rely
+                # on a trailing special token, so this is embedding-only.
+                if not self.is_generation and self.tokenizer is not None:
+                    sep_id = getattr(self.tokenizer, "sep_token_id", None)
+                    if sep_id is not None and input_ids and input_ids[-1] != sep_id:
+                        input_ids[-1] = sep_id
                 input_token_num = len(input_ids)
             else:
                 raise ValueError(
