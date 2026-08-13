@@ -9,11 +9,12 @@ from sglang.srt.managers.schedule_batch import MultimodalDataItem
 from sglang.srt.mem_cache.multimodal_cache import EmbeddingResult, MultiModalStaticCache
 from sglang.srt.multimodal.evs import EVSEmbeddingResult
 from sglang.srt.runtime_context import get_parallel, get_schedule
-from sglang.srt.utils import is_hip, is_npu
+from sglang.srt.utils import is_hip, is_npu, is_xpu
 from sglang.utils import logger
 
 _is_hip = is_hip()
 _is_npu = is_npu()
+_is_xpu = is_xpu()
 
 embedding_cache: Optional[MultiModalStaticCache] = None
 
@@ -579,6 +580,12 @@ def _adjust_embedding_length(
     logger,
 ) -> torch.Tensor:
     num_mm_tokens_in_embedding = embedding.shape[0]
+    if _is_xpu:
+        # Drain the XPU stream before the device->host copy below. Under
+        # concurrent multimodal batches on a tp forward, this .item() sync
+        # otherwise deadlocks in a Level Zero appendUSMMemcpy (see the analogous
+        # NPU stream sync in get_embedding_and_mask).
+        torch.xpu.synchronize()
     num_mm_tokens_in_input_ids = mask.sum().item()
     if num_mm_tokens_in_input_ids != num_mm_tokens_in_embedding:
         logger.warning(
