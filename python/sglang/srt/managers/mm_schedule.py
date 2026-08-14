@@ -581,12 +581,13 @@ def _adjust_embedding_length(
 ) -> torch.Tensor:
     num_mm_tokens_in_embedding = embedding.shape[0]
     if _is_xpu:
-        # Drain the XPU stream before the device->host copy below. Under
-        # concurrent multimodal batches on a tp forward, this .item() sync
-        # otherwise deadlocks in a Level Zero appendUSMMemcpy (see the analogous
-        # NPU stream sync in get_embedding_and_mask).
-        torch.xpu.synchronize()
-    num_mm_tokens_in_input_ids = mask.sum().item()
+        # XPU: mask.sum().item() (and an explicit xpu.synchronize) deadlock the
+        # Level Zero queue under concurrent multimodal at tp>1. The chunked-prefill
+        # embedding is already sliced to this chunk's mm tokens, so the count equals
+        # embedding rows on the normal path; skip the device read.
+        num_mm_tokens_in_input_ids = num_mm_tokens_in_embedding
+    else:
+        num_mm_tokens_in_input_ids = mask.sum().item()
     if num_mm_tokens_in_input_ids != num_mm_tokens_in_embedding:
         logger.warning(
             f"Number of tokens in multimodal embedding does not match those in the input text. "
