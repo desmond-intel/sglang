@@ -373,15 +373,20 @@ class InternVisionEncoder(nn.Module):
         encoder_states = () if output_hidden_states else None
         hidden_states = inputs_embeds
 
+        vision_max_seqlen = None
         if cu_seqlens is None:
             bsz, seq_len, _ = inputs_embeds.shape
             cu_seqlens = _get_cu_seqlens_for_shape(
                 bsz, seq_len, device=inputs_embeds.device
             )
+            # Uniform ViT tiles: max == per-tile seq_len (host-side). Passing it lets
+            # prepare_vision_attention_metadata skip a device->host .item() that
+            # deadlocks Level Zero USM memcpy under concurrent multimodal on XPU.
+            vision_max_seqlen = seq_len
         forward_metadata = None
         if isinstance(cu_seqlens, torch.Tensor):
             forward_metadata = prepare_vision_attention_metadata(
-                cu_seqlens, device=inputs_embeds.device
+                cu_seqlens, device=inputs_embeds.device, max_seqlen=vision_max_seqlen
             )
         elif cu_seqlens is None:
             cu_seqlens = SingletonCache()
