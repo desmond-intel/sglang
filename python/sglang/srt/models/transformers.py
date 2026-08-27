@@ -141,6 +141,19 @@ def _resolve_attention_backend_model_cls(config: PretrainedConfig):
     return None
 
 
+# Remote-code archs whose auto_map points AutoModel at a generation-head wrapper
+# instead of the base model; the Transformers backend unwraps these to `.model`.
+_AUTOMODEL_UNWRAP_ARCHS = {"RForConditionalGeneration"}
+
+
+def _coerce_legacy_tied_weights_keys(model_cls) -> None:
+    # transformers>=5 dropped list support in get_expanded_tied_weights_keys, so
+    # remote models written for <5 (e.g. R-4B) ship a list and crash; map to self.
+    keys = getattr(model_cls, "_tied_weights_keys", None)
+    if isinstance(keys, list):
+        model_cls._tied_weights_keys = {k: k for k in keys}
+
+
 def _encoder_accepts_feature_kwarg(encoder, feature_kwarg: str) -> bool:
     try:
         sig = inspect.signature(encoder)
@@ -602,6 +615,8 @@ class TransformersBase(nn.Module):
 
         # Resolve model class for _supports_attention_backend check
         model_cls = _resolve_attention_backend_model_cls(config)
+        if model_cls is not None:
+            _coerce_legacy_tied_weights_keys(model_cls)
 
         supports_backend = (
             getattr(model_cls, "_supports_attention_backend", True)
@@ -624,6 +639,16 @@ class TransformersBase(nn.Module):
                 "(_supports_attention_backend=False). The Transformers backend "
                 "requires custom attention support."
             )
+
+        # R-4B and similar remote checkpoints point AutoModel at their
+        # *ForConditionalGeneration head; unwrap to the base model the backend wants.
+        if type(self.model).__name__ in _AUTOMODEL_UNWRAP_ARCHS and hasattr(
+            self.model, "model"
+        ):
+            self.model = self.model.model
+            # These heads build sub-towers per sub-config dtype (R-4B pins vision
+            # to fp32); unify to serving dtype so fp32 layers don't feed half Linears.
+            self.model = self.model.to(torch.get_default_dtype())
 
         self.vocab_size = getattr(
             self.text_config,
@@ -1356,6 +1381,9 @@ class MultiModalMixin:
                 WeightsMapper(
                     orig_to_new_prefix={
                         "vision_tower.vision_model.": "model.vision_tower.",
+                        # trust_remote_code heads (e.g. R-4B) nest the tower one
+                        # `model.` deeper in the checkpoint.
+                        "model.vision_tower.vision_model.": "model.vision_tower.",
                     }
                 )
                 | self.weight_mapper
