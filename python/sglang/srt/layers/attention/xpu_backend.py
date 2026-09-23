@@ -355,7 +355,10 @@ class XPUAttentionBackend(AttentionBackend):
 
         elif forward_batch.forward_mode.is_extend_or_draft_extend_or_mixed(
             include_draft_extend_v2=True
-        ):
+        ) or forward_batch.forward_mode.is_dllm_extend():
+            # DLLM_EXTEND (diffusion LM) is an extend-class forward -- is_extend() covers it
+            # but the narrower is_extend_or_draft_extend_or_mixed() does not, so handle it here
+            # or metadata.page_table stays None and the strided-conversion below derefs None.
             metadata.cache_seqlens_int32 = seqlens_in_batch.to(torch.int32)
             metadata.max_seq_len_k = forward_batch.seq_lens_cpu.max().item()
             metadata.cu_seqlens_k = torch.nn.functional.pad(
