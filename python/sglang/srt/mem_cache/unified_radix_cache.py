@@ -918,14 +918,21 @@ class UnifiedRadixCache(BasePrefixCache):
     def dec_lock_ref(
         self,
         node_id: NodeId,
-        params: DecLockRefParams,
+        params: Optional[DecLockRefParams] = None,
         skip_swa: bool = False,
     ) -> DecLockRefResult:
+        # When disabled, is_chunk_cache() returns True (self.disable), so callers
+        # such as SchedulePolicy._lock_node use the 1-arg chunk-cache contract
+        # `dec_lock_ref(node)` with no params. Nothing is locked in disabled mode,
+        # so no-op *before* dereferencing `params`. Without the early return +
+        # optional `params`, multimodal / --disable-radix-cache runs crash at warmup:
+        # "TypeError: dec_lock_ref() missing 1 required positional argument: 'params'"
+        # (the VLM radix cluster on XPU: llava-onevision, aya-vision, fuyu, SmolVLM2, ...).
+        if self.disable:
+            return DecLockRefResult()
         result = self.session.try_dec_lock_ref(node_id, params)
         if result is not None:
             return result
-        if self.disable:
-            return DecLockRefResult()
         return self.tree_core.dec_lock_ref(node_id, params, skip_swa)
 
     def _dec_req_lock(self, req: Req, *, skip_swa: bool = False) -> None:
