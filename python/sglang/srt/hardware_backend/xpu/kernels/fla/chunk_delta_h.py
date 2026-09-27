@@ -41,6 +41,9 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
     h,
     initial_state,
     initial_state_indices,
+    track_state,
+    track_chunk_idx,
+    stride_track_state,
     cu_seqlens,
     chunk_offsets,
     T,
@@ -58,6 +61,7 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
     IS_VARLEN: tl.constexpr,
     NT_BUCKET: tl.constexpr,  # this arg is kept to align with the triton kernel for CUDA
     USE_EXP2: tl.constexpr,
+    TRACK_STATE: tl.constexpr,
 ):
     i_v, i_nh = tl.program_id(0), tl.program_id(1)
     i_n, i_h = i_nh // H, i_nh % H
@@ -123,6 +127,15 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
     if INPLACE_UPDATE:
         ht = ht + i_h * V * K
 
+    if TRACK_STATE:
+        i_track = tl.load(track_chunk_idx + i_n).to(tl.int32)
+        p_track_base = track_state + (i_n * stride_track_state + i_h * V * K).to(
+            tl.int64
+        )
+    else:
+        i_track = -1
+        p_track_base = track_state
+
     # main recurrence — time is the outer loop
     for i_t in range(NT):
         ########################################################################
@@ -157,6 +170,14 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
                 (1, 0),
             )
             tl.store(p_ho, b_h.to(p_ho.dtype.element_ty), boundary_check=(0, 1))
+
+            # Snapshot the pre-update h into track_state at the tracked chunk (fp32),
+            # so hybrid linear-attn continuous batching can capture the boundary state.
+            if TRACK_STATE and i_t == i_track:
+                p_t = tl.make_block_ptr(
+                    p_track_base, (V, K), (K, 1), (i_v * BV, k_blk), (BV, 64), (1, 0)
+                )
+                tl.store(p_t, b_h, boundary_check=(0, 1))
 
             # Accumulate correction: w_k @ h_k^T
             b_w = w_desc.load([i_t * BT, k_blk])
@@ -243,6 +264,8 @@ def chunk_gated_delta_rule_fwd_h(
     chunk_indices: Optional[torch.LongTensor] = None,
     use_exp2: bool = False,
     inplace_update: bool = True,
+    track_state: Optional[torch.Tensor] = None,
+    track_chunk_idx: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     if not inplace_update:
         raise NotImplementedError(
@@ -251,6 +274,13 @@ def chunk_gated_delta_rule_fwd_h(
     assert not (use_exp2 and g is not None), (
         "use_exp2 covers only the per-channel gk path; scalar g stays natural-exp"
     )
+    assert (track_state is None) == (track_chunk_idx is None), (
+        "track_state and track_chunk_idx must be passed together"
+    )
+    if track_state is not None:
+        assert track_state.dtype == torch.float32, (
+            f"track_state must be fp32, got {track_state.dtype}"
+        )
     B, T, Hg, K, V = *k.shape, u.shape[-1]
     H = u.shape[-2]
     BT = CHUNK_SIZE
@@ -303,5 +333,9 @@ def chunk_gated_delta_rule_fwd_h(
         IS_VARLEN=cu_seqlens is not None,
         NT_BUCKET=(0 if NT <= 32 else (1 if NT <= 128 else 2)),
         USE_EXP2=use_exp2,
+        track_state=track_state,
+        track_chunk_idx=track_chunk_idx,
+        stride_track_state=(track_state.stride(0) if track_state is not None else 0),
+        TRACK_STATE=track_state is not None,
     )
     return h, v_new
